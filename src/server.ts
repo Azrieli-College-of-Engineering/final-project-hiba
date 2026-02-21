@@ -7,18 +7,22 @@ const app = express();
 const PORT = 3000;
 
 app.use(express.json());
-console.log("Serving static from:", path.join(__dirname, "../public"));
 
-// Serve frontend
-app.use(express.static(path.join(__dirname, "../public")));
+/**
+ * public folder is at project root: /public
+ * server.ts is in: /src
+ * so we resolve: __dirname (src) -> .. -> public
+ */
+const publicPath = path.join(__dirname, "..", "public");
+console.log("Resolved public path:", publicPath);
+
+app.use(express.static(publicPath));
 
 app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "../public/index.html"));
+  res.sendFile(path.join(publicPath, "index.html"));
 });
 
 const subscription = new Subscription();
-
-/* ================= STATE ================= */
 
 app.get("/state", (req, res) => {
   res.json({
@@ -28,8 +32,6 @@ app.get("/state", (req, res) => {
     refunded: subscription.refunded
   });
 });
-
-/* ================= NORMAL FLOW ================= */
 
 app.post("/select-plan", (req, res) => {
   try {
@@ -58,78 +60,85 @@ app.post("/activate", (req, res) => {
   }
 });
 
-/* ================= ❌ VULNERABLE PAYMENT ================= */
-
+/**
+ * ❌ Vulnerable #1: trust client "paymentConfirmed"
+ * Can activate from any state (bypass)
+ */
 app.post("/payment/callback", (req, res) => {
-  const { paymentConfirmed } = req.body;
+  try {
+    const { paymentConfirmed } = req.body;
 
-  if (paymentConfirmed === true) {
-    const previousState = subscription.state;
+    if (paymentConfirmed === true) {
+      const previousState = subscription.state;
 
-    // ❌ Business Logic Bypass
-    subscription.state = SubscriptionState.ACTIVE;
-    subscription.paymentConfirmed = true;
-    subscription.activatedAt = new Date();
+      subscription.state = SubscriptionState.ACTIVE;
+      subscription.paymentConfirmed = true;
+      subscription.activatedAt = new Date();
 
-    return res.json({
-      message: "Payment accepted (vulnerable)",
-      previousState,
-      state: subscription.state
-    });
+      const bypassDetected = previousState !== SubscriptionState.PAYMENT_PENDING;
+
+      return res.json({
+        message: "Payment accepted (vulnerable)",
+        state: subscription.state,
+        bypass: bypassDetected,
+        previousState
+      });
+    }
+
+    res.status(400).json({ error: "Payment not confirmed" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
-
-  res.status(400).json({ error: "Payment not confirmed" });
 });
 
-/* ================= ✅ SECURE VERSION ================= */
-
+/**
+ * ✅ Secure payment callback: validate state before activating
+ */
 app.post("/secure/payment/callback", (req, res) => {
-  const { paymentConfirmed } = req.body;
+  try {
+    const { paymentConfirmed } = req.body;
 
-  if (subscription.state !== SubscriptionState.PAYMENT_PENDING) {
-    return res.status(400).json({
-      error: "Payment not expected in current state"
-    });
+    if (subscription.state !== SubscriptionState.PAYMENT_PENDING) {
+      return res.status(400).json({ error: "Payment not expected in current state" });
+    }
+
+    if (paymentConfirmed !== true) {
+      return res.status(400).json({ error: "Invalid payment confirmation" });
+    }
+
+    subscription.activate();
+
+    res.json({ message: "Payment verified securely", state: subscription.state });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
   }
-
-  if (paymentConfirmed !== true) {
-    return res.status(400).json({
-      error: "Invalid payment confirmation"
-    });
-  }
-
-  subscription.activate();
-
-  res.json({
-    message: "Payment verified securely",
-    state: subscription.state
-  });
 });
 
-/* ================= ❌ VULNERABLE REFUND ================= */
-
+/**
+ * ❌ Vulnerable #2: refund without validation
+ */
 app.post("/refund", (req, res) => {
-  subscription.refundVulnerable();
-  res.json({
-    message: "Refund processed (vulnerable)",
-    refunded: subscription.refunded
-  });
+  try {
+    subscription.refundVulnerable();
+    res.json({ message: "Refund processed (vulnerable)", state: subscription.state });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-/* ================= RESET ================= */
-
+/**
+ * Reset (lab only)
+ */
 app.post("/reset", (req, res) => {
   subscription.state = SubscriptionState.REGISTERED;
   subscription.paymentConfirmed = false;
   subscription.activatedAt = null;
   subscription.refunded = false;
 
-  res.json({ message: "Reset done" });
+  res.json({ message: "Reset done", state: subscription.state });
 });
 
-/* ================= START ================= */
-
 app.listen(PORT, () => {
-  console.log("SERVER RUNNING");
+  console.log("🔥 SERVER RUNNING 🔥");
   console.log(`http://localhost:${PORT}`);
 });
