@@ -27,6 +27,8 @@
       margin-bottom:25px;
     }
 
+    .meta { font-size:13px; color:#444; margin-top:8px; }
+
     button {
       padding:10px 20px;
       margin:5px;
@@ -64,15 +66,8 @@
       margin:5px;
     }
 
-    .active-node {
-      background:#2ecc71;
-      color:white;
-    }
-
-    .skipped {
-      background:#e74c3c;
-      color:white;
-    }
+    .active-node { background:#2ecc71; color:white; }
+    .skipped { background:#e74c3c; color:white; }
 
     #log {
       margin-top:20px;
@@ -80,7 +75,7 @@
       background:#111;
       color:#0f0;
       padding:15px;
-      height:160px;
+      height:200px;
       overflow:auto;
       font-family:monospace;
       border-radius:8px;
@@ -92,21 +87,9 @@
       justify-content:space-around;
     }
 
-    .box {
-      width:40%;
-      padding:15px;
-      border-radius:10px;
-    }
-
-    .vuln {
-      background:#ffe6e6;
-      border:2px solid #e74c3c;
-    }
-
-    .safe {
-      background:#e8fff1;
-      border:2px solid #2ecc71;
-    }
+    .box { width:40%; padding:15px; border-radius:10px; }
+    .vuln { background:#ffe6e6; border:2px solid #e74c3c; }
+    .safe { background:#e8fff1; border:2px solid #2ecc71; }
 
     .impact {
       margin-top:20px;
@@ -140,14 +123,12 @@
   </div>
 
   <div class="state-box" id="state">Loading...</div>
+  <div class="meta" id="meta"></div>
 
   <div class="flow">
-    <div class="node" id="REGISTERED">REGISTERED</div>
-    ➜
-    <div class="node" id="PLAN_SELECTED">PLAN_SELECTED</div>
-    ➜
-    <div class="node" id="PAYMENT_PENDING">PAYMENT_PENDING</div>
-    ➜
+    <div class="node" id="REGISTERED">REGISTERED</div> ➜
+    <div class="node" id="PLAN_SELECTED">PLAN_SELECTED</div> ➜
+    <div class="node" id="PAYMENT_PENDING">PAYMENT_PENDING</div> ➜
     <div class="node" id="ACTIVE">ACTIVE</div>
   </div>
 
@@ -164,7 +145,6 @@
     <button class="secure" onclick="securePayment()">🛡 Secure Payment Callback</button>
   </div>
 
-  <!-- STAGE 1 ADDITION: Second vulnerability -->
   <div class="section">
     <h3>Vulnerability #2: Refund Abuse</h3>
     <button class="danger" onclick="attackRefund()">💣 Refund (Vulnerable)</button>
@@ -177,6 +157,8 @@
 
   <div id="alertBox" class="alert-box"></div>
 
+  <!-- STAGE 2: Server-side audit -->
+  <h3 style="margin-top:22px; text-align:left;">Audit Log (Server-side)</h3>
   <div id="log"></div>
 
   <div id="impact" class="impact">
@@ -202,25 +184,18 @@
 
 <script>
 
-let lastAttack = null; // "PAYMENT" | "REFUND" | null
-
-function log(msg){
-  const panel = document.getElementById('log');
-  panel.innerHTML += msg + "<br>";
-  panel.scrollTop = panel.scrollHeight;
-}
+let lastAttack = null;
 
 function highlightState(current){
   const states = ["REGISTERED","PLAN_SELECTED","PAYMENT_PENDING","ACTIVE"];
-  states.forEach(s=>{
-    document.getElementById(s).className = "node";
-  });
+  states.forEach(s=> document.getElementById(s).className = "node");
 
   if(current === "ACTIVE" && lastAttack === "PAYMENT"){
     document.getElementById("REGISTERED").className = "node skipped";
     document.getElementById("ACTIVE").className = "node skipped";
   } else {
-    document.getElementById(current).className = "node active-node";
+    const el = document.getElementById(current);
+    if (el) el.className = "node active-node";
   }
 }
 
@@ -237,8 +212,25 @@ function hideAlert(){
 async function updateState(){
   const res = await fetch('/state');
   const data = await res.json();
+
   document.getElementById('state').innerText = "Current State: " + data.state;
+
+  const activatedAt = data.activatedAt ? new Date(data.activatedAt).toLocaleString() : "null";
+  document.getElementById('meta').innerText =
+    "paymentConfirmed=" + data.paymentConfirmed + " | activatedAt=" + activatedAt + " | refunded=" + data.refunded;
+
   highlightState(data.state);
+
+  // STAGE 2: Populate log from server audit
+  const audit = data.audit || [];
+  const lines = audit.map(function(e){
+    var line = "[" + e.time + "] " + e.type + " - " + e.message;
+    if (e.from) line += " (from=" + e.from + ")";
+    if (e.to) line += " (to=" + e.to + ")";
+    return line;
+  });
+  document.getElementById("log").innerHTML = lines.join("<br>");
+  document.getElementById("log").scrollTop = 0;
 }
 
 async function post(url, body){
@@ -248,21 +240,18 @@ async function post(url, body){
     options.body = JSON.stringify(body);
   }
   const res = await fetch(url, options);
-  log("[INFO] Executed: " + url);
   document.getElementById("impact").style.display = "none";
   hideAlert();
   lastAttack = null;
   updateState();
-  return { ok: res.ok, json: res.ok ? await res.json().catch(()=>null) : null };
+  return { ok: res.ok, json: res.ok ? await res.json().catch(function(){ return null; }) : null };
 }
 
 async function attackPayment(){
   lastAttack = "PAYMENT";
   const { ok, json } = await post('/payment/callback', { paymentConfirmed: true });
 
-  log("[ALERT] Vulnerable payment callback triggered");
   document.getElementById("impact").style.display = "block";
-
   if (ok && json) {
     showAlert("🚨 PAYMENT BYPASS — Previous state: " + json.previousState);
   }
@@ -271,9 +260,8 @@ async function attackPayment(){
 
 async function securePayment(){
   const { ok } = await post('/secure/payment/callback', { paymentConfirmed: true });
-  if (ok) log("[INFO] Secure payment accepted");
-  else log("[SECURE] Payment callback blocked (wrong state)");
-  hideAlert();
+  if (!ok) showAlert("Blocked: wrong state or invalid confirmation");
+  else hideAlert();
   lastAttack = null;
   updateState();
 }
@@ -282,21 +270,18 @@ async function attackRefund(){
   lastAttack = "REFUND";
   const { ok } = await post('/refund');
   if (ok) {
-    log("[ALERT] Vulnerable refund processed (no validation)");
-    showAlert("🚨 Refund applied without state check — try again for multiple refunds");
+    showAlert("🚨 Refund applied without validation — try again for multiple refunds");
   }
   updateState();
 }
 
 async function secureRefund(){
   const res = await fetch('/secure/refund', { method: 'POST' });
-  const json = await res.json().catch(()=>null);
+  const json = await res.json().catch(function(){ return null; });
   if (res.ok) {
-    log("[INFO] Secure refund processed");
     hideAlert();
   } else {
-    log("[SECURE] Refund blocked: " + (json?.error || "invalid state"));
-    showAlert("Blocked: " + (json?.error || "Refund not allowed"));
+    showAlert("Blocked: " + (json && json.error ? json.error : "Refund not allowed"));
   }
   lastAttack = null;
   updateState();
