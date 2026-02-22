@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="utf-8" />
   <title>Business Logic Security Lab</title>
   <style>
     body {
@@ -38,6 +39,7 @@
     .normal { background:#3498db; color:white; }
     .danger { background:#e74c3c; color:white; }
     .secure { background:#2ecc71; color:white; }
+    .muted { background:#bdc3c7; color:#111; }
 
     .section { margin-top:25px; }
 
@@ -139,7 +141,6 @@
 
   <div class="state-box" id="state">Loading...</div>
 
-  <!-- FLOW VISUALIZATION -->
   <div class="flow">
     <div class="node" id="REGISTERED">REGISTERED</div>
     ➜
@@ -150,7 +151,6 @@
     <div class="node" id="ACTIVE">ACTIVE</div>
   </div>
 
-  <!-- NORMAL FLOW -->
   <div class="section">
     <h3>Normal Flow</h3>
     <button class="normal" onclick="post('/select-plan')">Select Plan</button>
@@ -158,41 +158,43 @@
     <button class="normal" onclick="post('/activate')">Activate</button>
   </div>
 
-  <!-- ATTACK -->
   <div class="section">
-    <h3>Attack Simulation</h3>
-    <button class="danger" onclick="attack()">💣 Vulnerable Payment Callback</button>
-    <button class="secure" onclick="secureAttack()">🛡 Secure Payment Callback</button>
+    <h3>Vulnerability #1: Payment Callback Bypass</h3>
+    <button class="danger" onclick="attackPayment()">💣 Vulnerable Payment Callback</button>
+    <button class="secure" onclick="securePayment()">🛡 Secure Payment Callback</button>
+  </div>
+
+  <!-- STAGE 1 ADDITION: Second vulnerability -->
+  <div class="section">
+    <h3>Vulnerability #2: Refund Abuse</h3>
+    <button class="danger" onclick="attackRefund()">💣 Refund (Vulnerable)</button>
+    <button class="secure" onclick="secureRefund()">🛡 Refund (Secure)</button>
   </div>
 
   <div class="section">
-    <button onclick="post('/reset')">Reset</button>
+    <button class="muted" onclick="post('/reset')">Reset</button>
   </div>
 
-  <!-- ALERT -->
   <div id="alertBox" class="alert-box"></div>
 
-  <!-- LOG PANEL -->
   <div id="log"></div>
 
-  <!-- IMPACT -->
   <div id="impact" class="impact">
     ⚠ Impact: Subscription activated without completing required business steps.
   </div>
 
-  <!-- COMPARISON -->
   <div class="compare">
     <div class="box vuln">
       <h4>❌ Vulnerable Logic</h4>
       <p>No state validation</p>
       <p>Trusts client payment confirmation</p>
-      <p>Allows activation bypass</p>
+      <p>Refund in any state / multiple times</p>
     </div>
     <div class="box safe">
       <h4>✅ Secure Logic</h4>
       <p>Validates current state</p>
       <p>Rejects unexpected payment events</p>
-      <p>Prevents logic skipping</p>
+      <p>Refund only when ACTIVE + paid + once</p>
     </div>
   </div>
 
@@ -200,7 +202,7 @@
 
 <script>
 
-let lastAttack=false;
+let lastAttack = null; // "PAYMENT" | "REFUND" | null
 
 function log(msg){
   const panel = document.getElementById('log');
@@ -210,12 +212,11 @@ function log(msg){
 
 function highlightState(current){
   const states = ["REGISTERED","PLAN_SELECTED","PAYMENT_PENDING","ACTIVE"];
-
   states.forEach(s=>{
     document.getElementById(s).className = "node";
   });
 
-  if(current === "ACTIVE" && lastAttack){
+  if(current === "ACTIVE" && lastAttack === "PAYMENT"){
     document.getElementById("REGISTERED").className = "node skipped";
     document.getElementById("ACTIVE").className = "node skipped";
   } else {
@@ -240,51 +241,64 @@ async function updateState(){
   highlightState(data.state);
 }
 
-async function post(url){
-  await fetch(url,{method:'POST'});
-  log("[INFO] Executed: " + url);
-  document.getElementById("impact").style.display="none";
-  hideAlert();
-  lastAttack=false;
-  updateState();
-}
-
-async function attack(){
-  lastAttack=true;
-
-  const res = await fetch('/payment/callback',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({paymentConfirmed:true})
-  });
-
-  const data = await res.json();
-
-  log("[ALERT] Vulnerable callback triggered");
-  log("[CRITICAL] Business logic bypass detected");
-
-  document.getElementById("impact").style.display="block";
-
-  showAlert("🚨 BUSINESS LOGIC BYPASS DETECTED\nPrevious state: " + data.previousState);
-
-  updateState();
-}
-
-async function secureAttack(){
-  const res = await fetch('/secure/payment/callback',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({paymentConfirmed:true})
-  });
-
-  if(res.ok){
-    log("[INFO] Secure payment validated successfully");
-  } else {
-    log("[SECURE] Attack blocked by state validation");
+async function post(url, body){
+  const options = { method: 'POST' };
+  if (body) {
+    options.headers = { 'Content-Type': 'application/json' };
+    options.body = JSON.stringify(body);
   }
-
+  const res = await fetch(url, options);
+  log("[INFO] Executed: " + url);
+  document.getElementById("impact").style.display = "none";
   hideAlert();
-  lastAttack=false;
+  lastAttack = null;
+  updateState();
+  return { ok: res.ok, json: res.ok ? await res.json().catch(()=>null) : null };
+}
+
+async function attackPayment(){
+  lastAttack = "PAYMENT";
+  const { ok, json } = await post('/payment/callback', { paymentConfirmed: true });
+
+  log("[ALERT] Vulnerable payment callback triggered");
+  document.getElementById("impact").style.display = "block";
+
+  if (ok && json) {
+    showAlert("🚨 PAYMENT BYPASS — Previous state: " + json.previousState);
+  }
+  updateState();
+}
+
+async function securePayment(){
+  const { ok } = await post('/secure/payment/callback', { paymentConfirmed: true });
+  if (ok) log("[INFO] Secure payment accepted");
+  else log("[SECURE] Payment callback blocked (wrong state)");
+  hideAlert();
+  lastAttack = null;
+  updateState();
+}
+
+async function attackRefund(){
+  lastAttack = "REFUND";
+  const { ok } = await post('/refund');
+  if (ok) {
+    log("[ALERT] Vulnerable refund processed (no validation)");
+    showAlert("🚨 Refund applied without state check — try again for multiple refunds");
+  }
+  updateState();
+}
+
+async function secureRefund(){
+  const res = await fetch('/secure/refund', { method: 'POST' });
+  const json = await res.json().catch(()=>null);
+  if (res.ok) {
+    log("[INFO] Secure refund processed");
+    hideAlert();
+  } else {
+    log("[SECURE] Refund blocked: " + (json?.error || "invalid state"));
+    showAlert("Blocked: " + (json?.error || "Refund not allowed"));
+  }
+  lastAttack = null;
   updateState();
 }
 
