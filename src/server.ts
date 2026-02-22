@@ -29,7 +29,9 @@ app.get("/state", (req, res) => {
     state: subscription.state,
     paymentConfirmed: subscription.paymentConfirmed,
     activatedAt: subscription.activatedAt,
-    refunded: subscription.refunded
+    refunded: subscription.refunded,
+    audit: subscription.getAudit()
+    
   });
 });
 
@@ -126,15 +128,20 @@ app.post("/refund", (req, res) => {
   }
 });
 
+app.post("/secure/refund", (req, res) => {
+  try {
+    subscription.refundSecure();
+    res.json({ message: "Refund processed securely", state: subscription.state });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 /**
  * Reset (lab only)
  */
 app.post("/reset", (req, res) => {
-  subscription.state = SubscriptionState.REGISTERED;
-  subscription.paymentConfirmed = false;
-  subscription.activatedAt = null;
-  subscription.refunded = false;
-
+  subscription.reset();
   res.json({ message: "Reset done", state: subscription.state });
 });
 
