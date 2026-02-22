@@ -103,6 +103,11 @@ export class Subscription {
     this.refunded = true;
   }
 
+  /** Called by vulnerable payment callback (server) to record bypass in audit. */
+  recordPaymentBypass(fromState: SubscriptionState) {
+    this.log("ATTACK_PAYMENT_BYPASS", `Payment callback bypass: activated from ${fromState}`, fromState, SubscriptionState.ACTIVE);
+  }
+
   // ✅ Secure: refund only if ACTIVE + paid + not refunded yet
   refundSecure() {
     if (this.refunded === true) {

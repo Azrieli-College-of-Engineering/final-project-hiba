@@ -77,6 +77,8 @@ app.post("/payment/callback", (req, res) => {
       subscription.paymentConfirmed = true;
       subscription.activatedAt = new Date();
 
+      subscription.recordPaymentBypass(previousState);
+
       const bypassDetected = previousState !== SubscriptionState.PAYMENT_PENDING;
 
       return res.json({
